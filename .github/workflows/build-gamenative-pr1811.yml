@@ -1,0 +1,84 @@
+name: Build GameNative PR1811 Fold6 APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift || true
+          df -h /
+
+      - name: Check out GameNative PR #1811 head
+        uses: actions/checkout@v4
+        with:
+          repository: obiwanblee/GameNative
+          ref: 3f5cea3c27794864d1f764e46e980e3a3174a616
+          path: gamenative
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install required Android SDK packages
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          yes | "$SDKMANAGER" --install "platforms;android-36" "build-tools;34.0.0" "ndk;27.3.13750724"
+
+      - name: Inject dummy optional credentials
+        working-directory: gamenative
+        run: |
+          cat <<'EOF' > local.properties
+          POSTHOG_API_KEY=dummy
+          POSTHOG_HOST=https://us.i.posthog.com
+          STEAMGRIDDB_API_KEY=
+          CLOUD_PROJECT_NUMBER=
+          EOF
+
+      - name: Build Modern debug APK
+        working-directory: gamenative
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleModernDebug --no-daemon --stacktrace
+
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          APK="$(find gamenative/app/build/outputs/apk -type f -name '*modern*debug*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "Modern debug APK not found"
+            find gamenative/app/build/outputs -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+          cp "$APK" out/GameNative-PR1811-Fold6-modern-debug.apk
+          ls -lh out/GameNative-PR1811-Fold6-modern-debug.apk
+
+      - name: Upload Fold6 test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameNative-PR1811-Fold6-modern-debug
+          path: out/GameNative-PR1811-Fold6-modern-debug.apk
+          if-no-files-found: error
+          retention-days: 7
